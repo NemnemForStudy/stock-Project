@@ -12,6 +12,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +31,20 @@ public class KrStockService {
     private String appSecret;
 
     public Map<String, List<AssetDto>> getKrStockTop10() {
+        LocalTime now = LocalTime.now(ZoneId.of("Asia/Seoul"));
+        String trId;
+        String scrDivCode;
+
+        if (now.getHour() == 8) {
+            trId = "VHPST01710000";    // 넥스트레이드(ATS) 거래량 순위 TR ID
+            scrDivCode = "20171";      // 넥장용 화면번호 (매뉴얼 확인 필요)
+            System.out.println("--- 현재 넥스트레이드(ATS) 데이터를 가져옵니다 ---");
+        } else {
+            trId = "FHPST01710000";    // 본장(KRX) 거래량 순위 TR ID
+            scrDivCode = "20171";
+            System.out.println("--- 현재 한국거래소(KRX) 본장 데이터를 가져옵니다 ---");
+        }
+
         String url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/volume-rank";
 
         // 헤더 설정
@@ -43,7 +59,7 @@ public class KrStockService {
         // 쿼리 파라미터 설정
         UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(url)
                 .queryParam("FID_COND_MRKT_DIV_CODE", "J") // 주식
-                .queryParam("FID_COND_SCR_DIV_CODE", "20171") // 화면번호
+                .queryParam("FID_COND_SCR_DIV_CODE", scrDivCode) // 화면번호
                 .queryParam("FID_INPUT_ISCD", "0000") // 전체
                 .queryParam("FID_DIV_CLS_CODE", "0")
                 .queryParam("FID_BLNG_CLS_CODE", "0")

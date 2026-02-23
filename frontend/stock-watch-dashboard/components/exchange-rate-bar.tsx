@@ -1,5 +1,6 @@
 "use client"
 
+import { useState, useEffect} from "react"
 import { ArrowUpRight, ArrowDownRight } from "lucide-react"
 import { AreaChart, Area, ResponsiveContainer, YAxis } from "recharts"
 
@@ -11,57 +12,6 @@ interface RateEntry {
   changeValue: string
   history: number[]
 }
-
-const exchangeRates: RateEntry[] = [
-  {
-    pair: "USD/KRW",
-    label: "달러/원",
-    rate: "1,342.50",
-    change: 0.32,
-    changeValue: "+4.30",
-    history: [1335, 1338, 1336, 1340, 1337, 1339, 1341, 1338, 1340, 1343, 1341, 1344, 1342, 1343],
-  },
-  {
-    pair: "EUR/KRW",
-    label: "유로/원",
-    rate: "1,458.20",
-    change: -0.18,
-    changeValue: "-2.65",
-    history: [1465, 1462, 1464, 1460, 1463, 1461, 1459, 1462, 1460, 1457, 1459, 1456, 1458, 1458],
-  },
-  {
-    pair: "JPY/KRW",
-    label: "엔/원",
-    rate: "8.95",
-    change: 0.51,
-    changeValue: "+0.05",
-    history: [8.88, 8.90, 8.89, 8.91, 8.90, 8.92, 8.91, 8.93, 8.92, 8.94, 8.93, 8.94, 8.96, 8.95],
-  },
-  {
-    pair: "CNY/KRW",
-    label: "위안/원",
-    rate: "185.30",
-    change: -0.24,
-    changeValue: "-0.45",
-    history: [186.2, 186.0, 186.3, 185.8, 186.1, 185.7, 185.9, 185.5, 185.8, 185.4, 185.6, 185.2, 185.4, 185.3],
-  },
-  {
-    pair: "GBP/KRW",
-    label: "파운드/원",
-    rate: "1,698.40",
-    change: 0.15,
-    changeValue: "+2.50",
-    history: [1694, 1695, 1693, 1696, 1694, 1697, 1695, 1696, 1698, 1697, 1699, 1697, 1698, 1698],
-  },
-  {
-    pair: "BTC/USD",
-    label: "비트코인",
-    rate: "98,420",
-    change: 3.80,
-    changeValue: "+3,605",
-    history: [94200, 94800, 95100, 94600, 95500, 96200, 95800, 96800, 97100, 97500, 96900, 97800, 98100, 98420],
-  },
-]
 
 function SparkChart({ data, isPositive }: { data: number[]; isPositive: boolean }) {
   const chartData = data.map((value, i) => ({ v: value, i }))
@@ -93,6 +43,53 @@ function SparkChart({ data, isPositive }: { data: number[]; isPositive: boolean 
 }
 
 export function ExchangeRateBar() {
+  const [rates, setRates] = useState<RateEntry[]>([])
+
+  useEffect(() => {
+    const fetchRates = async () => {
+      try {
+        const response = await fetch("http://localhost:8080/api/exchange-rates")
+        const data = await response.json();
+
+        if (!Array.isArray(data)) {
+          console.error("데이터 형식이 배열이 아닙니다:", data);
+          return;
+        }
+
+        const formatted = data.map((item: any, index: number) => {
+          const info = item.output1;
+          const history = item.output2 || [];
+
+          if (!info || !info.stck_shrn_iscd) {
+            return null; // 데이터가 부실하면 제외
+          }
+
+          const symbol = info.stck_shrn_iscd;
+
+          return {
+            pair: symbol as string,
+            label: getFxLabel(symbol),
+            rate: Number(info.ovrs_nmix_prpr).toLocaleString(undefined, { minimumFractionDigits: 2 }),
+            change: Number(info.prdy_ctrt),
+            changeValue: (info.prdy_vrss_sign === "1" || info.prdy_vrss_sign === "2" ? "+" : "") + info.ovrs_nmix_prdy_vrss,
+            history: history.map((h: any) => Number(h.ovrs_nmix_prpr)).reverse() as number[]
+          };
+        })
+        .filter((v): v is RateEntry => v !== null);
+
+        setRates(formatted)
+      } catch (error) {
+        console.error("환율 데이터 로드 실패 : ", error)
+      }
+    }
+
+    fetchRates()
+    const timer = setInterval(fetchRates, 60000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  if(rates.length === 0) return null
+
   return (
     <div className="px-3 pt-3 lg:px-4 lg:pt-4">
       <div className="flex items-center gap-2 pb-2">
@@ -102,11 +99,11 @@ export function ExchangeRateBar() {
         <div className="h-px flex-1 bg-border" />
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6 lg:gap-3">
-        {exchangeRates.map((rate) => {
+        {rates.map((rate, index) => {
           const isPositive = rate.change > 0
           return (
             <div
-              key={rate.pair}
+              key={`${rate.pair}-${index}`}
               className="flex flex-col overflow-hidden rounded-lg border border-border bg-card"
             >
               {/* Top info */}
@@ -120,19 +117,12 @@ export function ExchangeRateBar() {
                   </div>
                 </div>
                 <div
-                  className={`flex items-center gap-0.5 rounded-sm px-1.5 py-0.5 text-[10px] font-mono font-bold ${
-                    isPositive
-                      ? "bg-neon-green/10 text-neon-green"
-                      : "bg-neon-red/10 text-neon-red"
-                  }`}
+                    className={`flex items-center gap-0.5 rounded-sm px-1.5 py-0.5 text-[10px] font-mono font-bold ${
+                        isPositive ? "bg-neon-green/10 text-neon-green" : "bg-neon-red/10 text-neon-red"
+                    }`}
                 >
-                  {isPositive ? (
-                    <ArrowUpRight className="h-2.5 w-2.5" />
-                  ) : (
-                    <ArrowDownRight className="h-2.5 w-2.5" />
-                  )}
-                  {isPositive ? "+" : ""}
-                  {rate.change}%
+                  {isPositive ? <ArrowUpRight className="h-2.5 w-2.5" /> : <ArrowDownRight className="h-2.5 w-2.5" />}
+                  {isPositive ? "+" : ""}{rate.change}%
                 </div>
               </div>
 
@@ -141,11 +131,9 @@ export function ExchangeRateBar() {
                 <span className="text-sm font-mono font-bold text-foreground">
                   {rate.rate}
                 </span>
-                <span
-                  className={`ml-1.5 text-[10px] font-mono font-semibold ${
+                <span className={`ml-1.5 text-[10px] font-mono font-semibold ${
                     isPositive ? "text-neon-green" : "text-neon-red"
-                  }`}
-                >
+                }`}>
                   {rate.changeValue}
                 </span>
               </div>
@@ -160,4 +148,16 @@ export function ExchangeRateBar() {
       </div>
     </div>
   )
+}
+
+// 코드에 따른 한글 라벨 반환
+function getFxLabel(code: string) {
+  const labels: Record<string, string> = {
+    USDKRW: "달러/원",
+    EURKRW: "유로/원",
+    JPYKRW: "엔/원",
+    CNYKRW: "위안/원",
+    GBPKRW: "파운드/원"
+  }
+  return labels[code] || "외환"
 }

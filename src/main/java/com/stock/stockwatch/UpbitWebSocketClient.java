@@ -58,8 +58,14 @@ public class UpbitWebSocketClient {
 
                 @Override
                 public void onClose(int code, String reason, boolean remote) {
-                    System.out.println("Disconnected from Upbit WebSocket: " + reason + "(Code: " + code + ")");
-                    reconnect();
+                    new Thread(() -> {
+                        try {
+                            Thread.sleep(5000);
+                            this.reconnect();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }).start();
                 }
 
                 @Override
