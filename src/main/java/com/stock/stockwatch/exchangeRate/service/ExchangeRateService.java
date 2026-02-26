@@ -1,96 +1,98 @@
 package com.stock.stockwatch.exchangeRate.service;
 
-import com.stock.stockwatch.common.auth.KisAuthService;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.web.util.UriComponentsBuilder;
 
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ExchangeRateService {
-    private final KisAuthService authService;
     private final RestTemplate restTemplate = new RestTemplate();
-    private List<Map<String, Object>> cachedRates = null;
-    private LocalDateTime lastFetched = LocalDateTime.MIN;
+    private final CacheManager cacheManager; // 캐시 매니저 주입
 
-    @Value("${stock_app_key}")
-    private String appKey;
-    @Value("${stock_app_secret}")
-    private String appSecret;
+    // 실시간 데이터를 담아둘 메모리 공간 (캐시)
+    private final Map<String, Double> cachedRates = new ConcurrentHashMap<>();
 
-    public synchronized List<Map<String, Object>> getAllExchangeRates() {
-        if (cachedRates != null && lastFetched.isAfter(LocalDateTime.now().minusMinutes(10))) {
-            return cachedRates;
+    @Value("${alpha_vantage_exchange_rate_key}")
+    private String apiKey;
+
+    // 프론트엔드에서 필요한 통화 목록
+    private final List<String> targetCurrencies = Arrays.asList("USD", "EUR", "JPY", "CNY", "GBP");
+
+    @PostConstruct
+    public void init() {
+        // 별도 스레드에서 실행해 서버 기동 속도에 영향 안주게
+        new Thread(this::updateExchangeRates).start();
+    }
+
+    @Cacheable(value = "exchangeRates", key = "'allRates'", unless = "#result.isEmpty()")
+    public Map<String, Double> getAllExchangeRates() {
+        // 캐시가 비어있을 경우를 대비해 초기 데이터가 없다면 한 번 실행 유도 가능
+        if (cachedRates.isEmpty()) {
+            log.warn("Cache is empty. Waiting for scheduler or manual trigger.");
         }
+        return cachedRates;
+    }
+    /**
+     * 스케줄러: 10분마다 환율을 자동으로 업데이트합니다.
+     * Alpha Vantage 무료 제한(분당 5회)을 피하기 위해 통화별로 15초 간격을 두고 호출합니다.
+     */
+    @Scheduled(fixedRate = 600000) // 10분마다 실행
+    public void updateExchangeRates() {
+        log.info("Starting scheduled exchange rate update");
 
-        // 대시보드에 필요한 환율 코드 리스트 (FX@ 접두어 필수)
-        String[] targetSymbols = {"FX@USDKRW", "FX@EURKRW", "FX@JPYKRW", "FX@CNYKRW", "FX@GBPKRW"};
-        List<Map<String, Object>> resultList = new ArrayList<>();
+        for (String currency : targetCurrencies) {
+            fetchAndCacheRate(currency);
 
-        for (String symbol : targetSymbols) {
-            Map<String, Object> rateData = fetchSingleExchangeRate(symbol);
-            if (!rateData.isEmpty()) {
-                resultList.add(rateData);
-            }
+            // 각 통화 정보를 가져올 때마다 Redis 캐시 실시간 업데이트
+            updateRedisCache();
 
+            // API 제한 방지를 위한 15초 대기
             try {
-                Thread.sleep(500);
+                Thread.sleep(15000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
+            log.info("Exchange rate update completed: {}", cachedRates);
         }
-        return resultList;
     }
 
-    private Map fetchSingleExchangeRate(String symbol) {
-        // 주요 환율 코드 리스트
-        String url = "https://openapi.koreainvestment.com:9443/uapi/overseas-price/v1/quotations/inquire-daily-chartprice";
+    private void fetchAndCacheRate(String from) {
+        String url = String.format(
+                "https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=%s&to_currency=KRW&apikey=%s",
+                from, apiKey
+        );
 
-        String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
-        String startDate = LocalDate.now().minusMonths(1).format(DateTimeFormatter.ofPattern("yyyyMMdd"));
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("authorization", authService.getAccessToken());
-        headers.set("appkey", appKey);
-        headers.set("appsecret", appSecret);
-        headers.set("tr_id", "FHKST03030100");
-        headers.set("custtype", "P");
-
-        UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(url)
-                .queryParam("FID_COND_MRKT_DIV_CODE", "X") // X: 환율
-                .queryParam("FID_INPUT_ISCD", symbol)     // FX@USDKRW (그대로 전달)
-                .queryParam("FID_INPUT_DATE_1", startDate)
-                .queryParam("FID_INPUT_DATE_2", today)
-                .queryParam("FID_PERIOD_DIV_CODE", "D");   // D: 일별
-
-        System.out.println(builder);
-        HttpEntity<String> entity = new HttpEntity<>(headers);
         try {
-            ResponseEntity<Map> response = restTemplate.exchange(
-                    builder.toUriString(), HttpMethod.GET, entity, Map.class
-            );
-
-            System.out.println("Response Body: " + response.getBody());
-            System.out.println("====== [KIS API Request End] ======");
-
-            return response.getBody();
+            Map<String, Object> response = restTemplate.getForObject(url, Map.class);
+            if (response != null && response.containsKey("Realtime Currency Exchange Rate")) {
+                Map<String, String> data = (Map<String, String>) response.get("Realtime Currency Exchange Rate");
+                double rate = Double.parseDouble(data.get("5. Exchange Rate"));
+                cachedRates.put(from, rate); // 예: "USD" -> 1342.5
+            } else {
+                log.warn("Failed to fetch rate for {}: {}", from, response);
+            }
         } catch (Exception e) {
-            e.printStackTrace();
-            return Collections.emptyMap();
+            log.error("Error fetching Alpha Vantage rate for {}", from, e);
+        }
+    }
+
+    private void updateRedisCache() {
+        if(!cachedRates.isEmpty() && cacheManager.getCache("exchangeRates") != null) {
+            cacheManager.getCache("exchangeRates").put("allRates", new HashMap<>(cachedRates));
         }
     }
 }

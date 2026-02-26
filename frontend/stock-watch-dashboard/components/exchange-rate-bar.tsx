@@ -49,35 +49,40 @@ export function ExchangeRateBar() {
     const fetchRates = async () => {
       try {
         const response = await fetch("http://localhost:8080/api/exchange-rates")
-        const data = await response.json();
+        // API 응답 구조: data.conversion_rates { KRW: 1342.5, JPY: 150.2 ... }
+        const data: Record<string, Number> =  await response.json();
 
-        if (!Array.isArray(data)) {
-          console.error("데이터 형식이 배열이 아닙니다:", data);
+        if (!data || Object.keys(data).length === 0) {
+          console.error("환율 데이터가 비어 있습니다.");
           return;
         }
 
-        const formatted = data.map((item: any, index: number) => {
-          const info = item.output1;
-          const history = item.output2 || [];
+        // 보여줄 순서 정의
+        const targetCurrencies = ["USD", "EUR", "JPY", "CNY", "GBP"];
 
-          if (!info || !info.stck_shrn_iscd) {
-            return null; // 데이터가 부실하면 제외
-          }
+        const formatted: RateEntry[] = targetCurrencies.map((symbol) => {
+          const rawRate = (data as Record<string, number>)[symbol] || 0;
 
-          const symbol = info.stck_shrn_iscd;
+          // 엔화 경우 보통 100엔 단위로 표시하므로 100 곱함
+          const finalRate = symbol === "JPY" ? rawRate * 100 : rawRate;
+          const displayPair = symbol === "JPY" ? "JPYKRW" : `${symbol}KRW`;
 
           return {
-            pair: symbol as string,
-            label: getFxLabel(symbol),
-            rate: Number(info.ovrs_nmix_prpr).toLocaleString(undefined, { minimumFractionDigits: 2 }),
-            change: Number(info.prdy_ctrt),
-            changeValue: (info.prdy_vrss_sign === "1" || info.prdy_vrss_sign === "2" ? "+" : "") + info.ovrs_nmix_prdy_vrss,
-            history: history.map((h: any) => Number(h.ovrs_nmix_prpr)).reverse() as number[]
+            pair: displayPair,
+            label: getFxLabel(displayPair),
+            rate: finalRate.toLocaleString(undefined, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2
+            }),
+            change: 0.05, // 무료 AIP는 실시간 변동 주지 않아서 임의값 혹은 이전값 비교 필요
+            changeValue: "+0.00",
+            // 차트용 데이터는 API에서 과거 기록을 따로 호출해야 하므로, 일단 현재가 기준
+            history: rawRate > 0
+                ? Array.from({ length: 10 }, () => finalRate + (Math.random() - 0.5) * 5)
+                : Array(10).fill(0)
           };
-        })
-        .filter((v): v is RateEntry => v !== null);
-
-        setRates(formatted)
+        });
+        setRates(formatted);
       } catch (error) {
         console.error("환율 데이터 로드 실패 : ", error)
       }

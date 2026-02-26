@@ -64,7 +64,7 @@ export function Dashboard() {
 
     fetchKrData()
     // 10초마다 갱신해 "실시간" 느낌을 줌.
-    const timer = setInterval(fetchKrData, 1000)
+    const timer = setInterval(fetchKrData, 10000)
     return () => clearInterval(timer)
   }, [])
 
@@ -105,7 +105,7 @@ export function Dashboard() {
     }
     fetchUsData()
     // 10초마다 갱신해 "실시간" 느낌을 줌.
-    const timer = setInterval(fetchUsData, 1000)
+    const timer = setInterval(fetchUsData, 10000)
     return () => clearInterval(timer)
   }, [])
 
@@ -147,7 +147,7 @@ export function Dashboard() {
     }
     fetchUpbitData()
     // 10초마다 갱신해 "실시간" 느낌을 줌.
-    const timer = setInterval(fetchUpbitData, 1000)
+    const timer = setInterval(fetchUpbitData, 10000)
     return () => clearInterval(timer)
   }, [])
 

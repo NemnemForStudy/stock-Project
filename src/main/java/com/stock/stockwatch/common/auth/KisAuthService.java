@@ -1,6 +1,7 @@
 package com.stock.stockwatch.common.auth;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -32,6 +33,9 @@ public class KisAuthService {
         RestTemplate restTemplate = new RestTemplate();
         String url = "https://openapi.koreainvestment.com:9443/oauth2/tokenP";
 
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
         // 요청 바디 구성
         Map<String, String> body = Map.of(
             "grant_type", "client_credentials",
@@ -39,10 +43,18 @@ public class KisAuthService {
             "appsecret", appSecret
         );
 
+        HttpEntity<Map<String, String>> entity = new HttpEntity<>(body, headers);
+
         try {
-            Map<String, Object> response = restTemplate.postForObject(url, body, Map.class);
-            if(response != null && response.containsKey("access_token")) {
-                this.accessToken = response.get("access_token").toString();
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    url, HttpMethod.POST, entity, Map.class
+            );
+            Map<String, Object> result = response.getBody();
+            if (result != null && result.containsKey("access_token")) {
+                this.accessToken = result.get("access_token").toString();
+                System.out.println("토큰 발급 성공");
+            } else {
+                System.out.println("토큰 없음 - 응답 확인 필요");
             }
         } catch (Exception e) {
             throw new RuntimeException("KIS 토큰 발급 실패 : " + e.getMessage());

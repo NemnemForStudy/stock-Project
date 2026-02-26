@@ -9,6 +9,7 @@ import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +20,9 @@ public class UpbitMarketService {
     // RestTemplate : 스프링에서 제공하는 HTTP 통신 도구임.
     // 브라우저 주소창을 치는 것처럼, 자바가 API에 접속하게 해줌.
     private final RestTemplate restTemplate;
+    private Map<String, List<AssetDto>> cachedResult = null;
+    private LocalDateTime lastFetched = LocalDateTime.MIN;
+    private static final int CACHE_MINUTES = 1; // 1분 캐시
 
     // 이렇게 RestTemplateBuilder를 주입받아 빌드해야 @RestClientTest가 인식함.
     public UpbitMarketService(RestTemplateBuilder restTemplateBuilder) {
@@ -29,50 +33,54 @@ public class UpbitMarketService {
      *업비트에서 거래대금이 가장 많은 상위 10개 코인의 코드를 가져옴.
      * */
     public Map<String, List<AssetDto>> getTop10MarketCodes() {
-        // 1. 업비트 모든 마켓 종류 가져오기
-        String marketUrl = "https://api.upbit.com/v1/market/all";
-
-        // restTemplate.getForObject: 해당 URL에 GET 요청을 보내고 결과를 List로 가져옴.
-        List<Map<String, String>> allMarkets = restTemplate.getForObject(marketUrl, List.class);
-
-        if (allMarkets == null) {
-            return Collections.emptyMap();
+        // 캐시가 유효하면 바로 반환
+        if (cachedResult != null && lastFetched.isAfter(LocalDateTime.now().minusMinutes(CACHE_MINUTES))) {
+            return cachedResult;
         }
 
-        // Java Stream API : 리스트 데이터를 필터링하거나 가공할 때 쓰는 강력한 도구.
-        // stream()을 쓰면 필터링 -> 변환 -> 합쳐라 라는 것을 한 줄로 쓸 수 있어서 가독성이 좋아짐/
-        Map<String, String> nameMap = allMarkets.stream()
-                .filter(m -> m.get("market").startsWith("KRW-"))
-                // 업비트 상세조회 API가 이런 콤마 형식을 원해서 이렇게 씀.
-                .collect(Collectors.toMap(
-                        m -> m.get("market"),
-                        m -> m.get("korean_name")
-                ));
+        try {
+            String marketUrl = "https://api.upbit.com/v1/market/all";
+            List<Map<String, String>> allMarkets = restTemplate.getForObject(marketUrl, List.class);
+            if (allMarkets == null) return Collections.emptyMap();
 
-        // 3. 티커 조회를 위한 코드 리스트
-        // keySet() -> 맵이 가지고 있는 모든 키들만 모아서 보여달라는 뜻임.
-        String krwMarketCodes = String.join(",", nameMap.keySet());
+            Map<String, String> nameMap = allMarkets.stream()
+                    .filter(m -> m.get("market").startsWith("KRW-"))
+                    .collect(Collectors.toMap(
+                            m -> m.get("market"),
+                            m -> m.get("korean_name")
+                    ));
 
-        // 4. 상세 정보(거래대금) 조회
-        // tickerUrl 주소로 JSON을 응답함.(이 코인의 현재 상태는 이 상태이다! 라는 값을 보내줌)
-        String tickerUrl = "https://api.upbit.com/v1/ticker?markets=" + krwMarketCodes;
-        List<Map<String, Object>> tickerList = restTemplate.getForObject(tickerUrl, List.class);
+            String krwMarketCodes = String.join(",", nameMap.keySet());
+            String tickerUrl = "https://api.upbit.com/v1/ticker?markets=" + krwMarketCodes;
+            List<Map<String, Object>> tickerList = restTemplate.getForObject(tickerUrl, List.class);
 
-        // 전체 데이터를 DTO리스트로 변환
-        List<AssetDto> allAssets = tickerList.stream()
-                .map(t -> new AssetDto(
-                        t.get("market").toString().split("-")[1],
-                        nameMap.get(t.get("market").toString()),
-                        Double.valueOf(t.get("trade_price").toString()),
-                        Double.valueOf(t.get("signed_change_rate").toString()),
-                        t.get("change").toString(),
-                        Double.valueOf(t.get("acc_trade_price_24h").toString())
-                )).toList();
+            List<AssetDto> allAssets = tickerList.stream()
+                    .map(t -> new AssetDto(
+                            t.get("market").toString().split("-")[1],
+                            nameMap.get(t.get("market").toString()),
+                            Double.valueOf(t.get("trade_price").toString()),
+                            Double.valueOf(t.get("signed_change_rate").toString()),
+                            t.get("change").toString(),
+                            Double.valueOf(t.get("acc_trade_price_24h").toString())
+                    )).toList();
 
-        return AssetDto.createResponse(
-                filterAndSort(allAssets, true),
-                filterAndSort(allAssets, false)
-        );
+            // 캐시 저장
+            cachedResult = AssetDto.createResponse(
+                    filterAndSort(allAssets, true),
+                    filterAndSort(allAssets, false)
+            );
+            lastFetched = LocalDateTime.now();
+
+            return cachedResult;
+
+        } catch (Exception e) {
+            // 429 등 에러 발생 시 캐시가 있으면 캐시 반환, 없으면 빈 맵
+            if (cachedResult != null) {
+                System.out.println("API 오류 - 캐시 데이터 반환: " + e.getMessage());
+                return cachedResult;
+            }
+            return Collections.emptyMap();
+        }
     }
 
     private List<AssetDto> filterAndSort(List<AssetDto> list, boolean isBuy) {

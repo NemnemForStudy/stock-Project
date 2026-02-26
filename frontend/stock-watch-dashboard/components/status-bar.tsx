@@ -23,7 +23,7 @@ export function StatusBar({ mode }: StatusBarProps) {
       )
     }
     update()
-    const interval = setInterval(update, 1000)
+    const interval = setInterval(update, 10000)
     return () => clearInterval(interval)
   }, [])
 
