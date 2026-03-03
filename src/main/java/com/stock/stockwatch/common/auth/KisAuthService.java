@@ -17,6 +17,8 @@ public class KisAuthService {
 
     private String accessToken;
 
+    private String approvalKey;
+
     /**
      * KIS 토큰은 유효기간이 길기 때문에(24시간), 한 번 받아두면 계속 쓸 수 있습니다.
      * accessToken이 null일 때만 새로 받아오는 'Lazy Loading' 방식을 씁니다.
@@ -58,6 +60,43 @@ public class KisAuthService {
             }
         } catch (Exception e) {
             throw new RuntimeException("KIS 토큰 발급 실패 : " + e.getMessage());
+        }
+    }
+
+    public String getApprovalKey() {
+        if(this.approvalKey == null) {
+            fetchApprovalKey();
+        }
+        return this.approvalKey;
+    }
+
+    private void fetchApprovalKey() {
+        RestTemplate restTemplate = new RestTemplate();
+        String url = "https://openapi.koreainvestment.com:9443/oauth2/Approval";
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        Map<String, String> body = Map.of(
+                "grant_type", "client_credentials",
+                "appkey", appKey,
+                "secretKey", appSecret
+        );
+
+        HttpEntity<Map<String, String>> entity = new HttpEntity<>(body, headers);
+
+        try {
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    url, HttpMethod.POST, entity, Map.class
+            );
+
+            Map<String, Object> result = response.getBody();
+            if(result != null && result.containsKey("approval_key")) {
+                this.approvalKey = result.get("approval_key").toString();
+                System.out.println("Approval Key 발급 성공");
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("KIS Approval Key 발급 실패: " + e.getMessage());
         }
     }
 }

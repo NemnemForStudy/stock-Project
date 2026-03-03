@@ -1,14 +1,14 @@
-package com.stock.stockwatch;
+package com.stock.stockwatch.upbit.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.stock.stockwatch.entity.TradeEvent;
-import com.stock.stockwatch.repository.TradeEventRepository;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
 import java.net.URI;
@@ -20,18 +20,23 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 @Component
+@RequiredArgsConstructor
+@Slf4j
 public class UpbitWebSocketClient {
     private static final String UPBIT_WEBSOCKET_URI = "wss://api.upbit.com/websocket/v1";
+    private static final String KAFKA_TOPIC = "upbit-trades";
 
     private WebSocketClient webSocketClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private ExecutorService virtualThreadExecutor;
 
-    // 🚩 중요: 휘발성 플래그 (메모리 가시성 보장)
+    // 중요: 휘발성 플래그 (메모리 가시성 보장)
     private volatile boolean isRunning = true;
 
-    @Autowired
-    private TradeEventRepository tradeEventRepository;
+//    @Autowired
+//    private TradeEventRepository tradeEventRepository;
+    // 대신 Kafka 넣음.
+    private final KafkaTemplate<String, String> kafkaTemplate;
 
     @PostConstruct
     public void init() {
@@ -133,20 +138,14 @@ public class UpbitWebSocketClient {
 
         try {
             JsonNode rootNode = objectMapper.readTree(message);
-            String type = rootNode.path("type").asText();
 
-            if ("trade".equals(type)) {
-                double tradePrice = rootNode.path("trade_price").asDouble();
-                double tradeVolume = rootNode.path("trade_volume").asDouble();
+            if ("trade".equals(rootNode.path("type").asText())) {
                 String code = rootNode.path("code").asText();
-                long timestamp = rootNode.path("trade_timestamp").asLong();
-                double totalKrw = tradePrice * tradeVolume;
 
-                TradeEvent tradeEvent = new TradeEvent(code, tradePrice, tradeVolume, totalKrw, timestamp);
-
-                // 🚩 최종 방어막: 스프링이 꺼졌는지 한 번 더 예외처리
                 if (isRunning) {
-                    tradeEventRepository.save(tradeEvent);
+                    // DB 저장 지우고 Kafka로 전송만 함.
+                    // 전송할 때 코인 코드를 Key로 사용하면 특정 코인 데이터 순서대로 처리 가능.
+                    kafkaTemplate.send(KAFKA_TOPIC, code, message);
                 }
             }
         } catch (Exception e) {

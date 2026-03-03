@@ -2,13 +2,19 @@ package com.stock.stockwatch.krStock.service;
 
 import com.stock.stockwatch.common.AssetDto;
 import com.stock.stockwatch.common.auth.KisAuthService;
+import com.stock.stockwatch.entity.DomesticStock;
+import com.stock.stockwatch.krStock.repository.KrStockRepository;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -19,11 +25,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class KrStockService {
     private final KisAuthService authService;
     private final RestTemplate restTemplate = new RestTemplate();
+    private final KrStockRepository krStockRepository;
 
     @Value("${stock_app_key}")
     private String appKey;
@@ -125,5 +133,31 @@ public class KrStockService {
             case "4", "5" -> "FALL";
             default -> "EVEN";
         };
+    }
+
+    @Scheduled(fixedRate = 3600000)
+    @PostConstruct // 서버 켜질 때 딱 한 번 즉시 실행
+    @Transactional // 데이터 한꺼번에 넣어야 하니 트랜잭션 필수
+    public void syncDomesticStocks() {
+        log.info("국내 주식 종목 마스터 동기화 시작...");
+
+        Map<String, List<AssetDto>> top10Data = getKrStockTop10();
+        top10Data.values().forEach(assetList -> {
+            for(AssetDto dto : assetList) {
+                // 이미 있는 종목인지 체크하고 없으면 저장
+                if(!krStockRepository.existsByCode(dto.code())) {
+                    DomesticStock newStock = new DomesticStock(
+                            dto.code(),
+                            dto.name(),
+                            "J" // 코스피로 설정
+                    );
+                    krStockRepository.save(newStock);
+                    log.info("신규 종목 등록: {} ({})", dto.name(), dto.code());
+
+                }
+            }
+        });
+
+        log.info(">>>> 국내 주식 종목 마스터 동기화 완료!");
     }
 }

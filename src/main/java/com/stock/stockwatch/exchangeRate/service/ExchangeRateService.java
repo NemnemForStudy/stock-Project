@@ -26,7 +26,7 @@ public class ExchangeRateService {
     // 실시간 데이터를 담아둘 메모리 공간 (캐시)
     private final Map<String, Double> cachedRates = new ConcurrentHashMap<>();
 
-    @Value("${alpha_vantage_exchange_rate_key}")
+    @Value("${exchange_rate_key}")
     private String apiKey;
 
     // 프론트엔드에서 필요한 통화 목록
@@ -50,43 +50,29 @@ public class ExchangeRateService {
      * 스케줄러: 10분마다 환율을 자동으로 업데이트합니다.
      * Alpha Vantage 무료 제한(분당 5회)을 피하기 위해 통화별로 15초 간격을 두고 호출합니다.
      */
-    @Scheduled(fixedRate = 600000) // 10분마다 실행
     public void updateExchangeRates() {
-        log.info("Starting scheduled exchange rate update");
+        log.info("ExchangeRate-API를 통한 환율 갱신 시작");
 
-        for (String currency : targetCurrencies) {
-            fetchAndCacheRate(currency);
-
-            // 각 통화 정보를 가져올 때마다 Redis 캐시 실시간 업데이트
-            updateRedisCache();
-
-            // API 제한 방지를 위한 15초 대기
-            try {
-                Thread.sleep(15000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-            log.info("Exchange rate update completed: {}", cachedRates);
-        }
-    }
-
-    private void fetchAndCacheRate(String from) {
-        String url = String.format(
-                "https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=%s&to_currency=KRW&apikey=%s",
-                from, apiKey
-        );
-
+        // KRW 기준으로 모든 환율 정보를 한 번에 가져옴
+        String url = String.format("https://v6.exchangerate-api.com/v6/%s/latest/KRW", apiKey);
         try {
             Map<String, Object> response = restTemplate.getForObject(url, Map.class);
-            if (response != null && response.containsKey("Realtime Currency Exchange Rate")) {
-                Map<String, String> data = (Map<String, String>) response.get("Realtime Currency Exchange Rate");
-                double rate = Double.parseDouble(data.get("5. Exchange Rate"));
-                cachedRates.put(from, rate); // 예: "USD" -> 1342.5
-            } else {
-                log.warn("Failed to fetch rate for {}: {}", from, response);
+
+            if (response != null && "success".equals(response.get("result"))) {
+                Map<String, Object> rates = (Map<String, Object>) response.get("conversion_rates");
+
+                for (String currency : targetCurrencies) {
+                    if (rates.containsKey(currency)) {
+                        // KIS 방식(1 / 외화)으로 계산하여 KRW 가격 추출
+                        double rateToKrw = 1.0 / Double.parseDouble(rates.get(currency).toString());
+                        cachedRates.put(currency, Math.round(rateToKrw * 100.0) / 100.0);
+                    }
+                }
+                updateRedisCache();
+                log.info(">>>> 환율 갱신 완료: {}", cachedRates);
             }
         } catch (Exception e) {
-            log.error("Error fetching Alpha Vantage rate for {}", from, e);
+            log.error("환율 API 호출 실패: {}", e.getMessage());
         }
     }
 
